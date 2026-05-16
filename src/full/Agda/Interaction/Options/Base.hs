@@ -1126,6 +1126,9 @@ vimFlag o = return $ o { optGenerateVimFile = True }
 onlyScopeCheckingFlag :: Flag CommandLineOptions
 onlyScopeCheckingFlag o = return $ o { optOnlyScopeChecking = True }
 
+countDeclarationsFlag :: Flag CommandLineOptions
+countDeclarationsFlag o = return $ o { optCountDeclarations = True }
+
 transliterateFlag :: Flag CommandLineOptions
 transliterateFlag o = return $ o { optTransliterate = True }
 
@@ -1382,6 +1385,8 @@ essentialConfigurationOptions = ("Essential type checker configuration",)
 
     , Option []     ["only-scope-checking"] (NoArg onlyScopeCheckingFlag)
                     "only scope-check the top-level module, do not type-check it"
+    , Option []     ["count-declarations"] (NoArg countDeclarationsFlag)
+                    "parse the module and print declaration statistics (no type-checking)"
     , Option []     ["interaction-exit-on-error"]
                     (NoArg interactionExitFlag)
                     "exit if a type error is encountered"

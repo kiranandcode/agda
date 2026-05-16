@@ -90,6 +90,8 @@ data CommandLineOptions = Options
   , optPragmaOptions         :: PragmaOptions
   , optOnlyScopeChecking     :: Bool
       -- ^ Should the top-level module only be scope-checked, and not type-checked?
+  , optCountDeclarations     :: Bool
+      -- ^ Should we count declarations in the parsed module and print statistics?
   , optTransliterate         :: Bool
       -- ^ Should code points that are not supported by the locale be transliterated?
   , optDiagnosticsColour     :: DiagnosticsColours

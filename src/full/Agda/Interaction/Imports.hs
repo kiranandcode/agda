@@ -106,6 +106,7 @@ import Agda.TypeChecking.Monad.Benchmark qualified as Bench
 import Agda.TheTypeChecker
 
 import Agda.Interaction.BasicOps ( getGoals, prettyGoals )
+import Agda.Interaction.CountDeclarations ( tickDeclarations )
 import Agda.Interaction.FindFile
 import Agda.Interaction.Highlighting.Generate
 import Agda.Interaction.Highlighting.Precise qualified as Highlighting ( convert )
@@ -1355,6 +1356,10 @@ createInterface mname sf@(SourceFile sfi) isMain msrc = do
       reportSLn "import.iface.create" 10 $ "  visited: " ++ visited
 
     src <- maybe (parseSource sf) pure msrc
+
+    -- Count declarations if --count-declarations is active.
+    whenM (optCountDeclarations <$> commandLineOptions) $
+      tickDeclarations (srcModule src)
 
     srcPath <- srcFilePath $ srcOrigin src
 
