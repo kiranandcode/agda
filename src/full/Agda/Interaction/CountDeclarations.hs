@@ -19,8 +19,21 @@ module Agda.Interaction.CountDeclarations
 import qualified Data.HashMap.Strict as HMap
 import Data.Semigroup ( Sum(..) )
 import Control.DeepSeq ( rnf )
+import Control.Monad.IO.Class ( liftIO )
+import System.Environment ( lookupEnv )
+
+import qualified Data.Aeson as A
+import Data.Aeson ( (.=) )
+import qualified Data.ByteString.Lazy.Char8 as BL
 
 import qualified Agda.Syntax.Concrete as C
+import Agda.Syntax.Position
+  ( Range, getRange, rangeFile, rStart', rEnd', posLine, posCol )
+import Agda.Syntax.Common.Pretty ( prettyShow )
+import Agda.Utils.FileName ( filePath )
+import Agda.Utils.Maybe.Strict qualified as Strict
+import qualified Agda.Syntax.Position as P
+
 import Agda.TypeChecking.Monad.Base
   ( TCM, Statistics(..), modifyTCLens' )
 import Agda.TypeChecking.Monad.State ( lensAccumStatistics )
@@ -31,6 +44,9 @@ tickDeclarations :: C.Module -> TCM ()
 tickDeclarations (C.Mod _ pragmas decls) = do
   tickAccum "decl.pragmas" (fromIntegral $ length pragmas)
   mapM_ tickDecl decls
+  liftIO (lookupEnv "AGDA_DUMP_DECLS") >>= \case
+    Nothing   -> return ()
+    Just path -> liftIO $ dumpDecls path decls
 
 -- | Directly increment a counter in the persistent accumulated statistics.
 tickAccum :: String -> Word -> TCM ()
@@ -111,3 +127,83 @@ tickDecl decl = case decl of
 -- | Tick a counter by 1.
 tick1 :: String -> TCM ()
 tick1 name = tickAccum name 1
+
+------------------------------------------------------------------------
+-- Per-declaration JSONL dump (activated by AGDA_DUMP_DECLS=<path>)
+------------------------------------------------------------------------
+
+-- | Walker context: enclosing module/record/data names (outermost first)
+--   and active block modifiers (private, abstract, field, postulate, ...).
+data Ctx = Ctx
+  { ctxScope :: [String]
+  , ctxFlags :: [String]
+  }
+
+-- | Append one JSON object per named declaration to the dump file.
+dumpDecls :: FilePath -> [C.Declaration] -> IO ()
+dumpDecls path decls =
+  BL.appendFile path $ BL.unlines $ map A.encode $
+    concatMap (walkDecl (Ctx [] [])) decls
+
+-- | Emit a JSON entry for a named declaration at the given range.
+entry :: Ctx -> String -> String -> Range -> [A.Value]
+entry ctx kind name r =
+  [ A.object
+      [ "kind"       .= kind
+      , "name"       .= name
+      , "scope"      .= ctxScope ctx
+      , "flags"      .= ctxFlags ctx
+      , "file"       .= file
+      , "start_line" .= (posLine <$> start)
+      , "start_col"  .= (posCol  <$> start)
+      , "end_line"   .= (posLine <$> end)
+      , "end_col"    .= (posCol  <$> end)
+      ]
+  ]
+  where
+    start = rStart' r
+    end   = rEnd' r
+    file  = case rangeFile r of
+      Strict.Just f  -> Just $ filePath $ P.rangeFilePath f
+      Strict.Nothing -> Nothing
+
+addFlag :: String -> Ctx -> Ctx
+addFlag f ctx = ctx { ctxFlags = ctxFlags ctx ++ [f] }
+
+pushScope :: String -> Ctx -> Ctx
+pushScope s ctx = ctx { ctxScope = ctxScope ctx ++ [s] }
+
+walkDecl :: Ctx -> C.Declaration -> [A.Value]
+walkDecl ctx d = case d of
+  C.TypeSig _ _ n _  -> entry ctx "type-signature" (prettyShow n) (getRange d)
+  C.FunClause{}      -> entry ctx "function-clause" "" (getRange d)
+  C.FieldSig _ _ n _ -> entry ctx "field-signature" (prettyShow n) (getRange d)
+  C.DataSig _ _ n _ _ -> entry ctx "data-signature" (prettyShow n) (getRange d)
+  C.Data _ _ n _ _ cs ->
+    entry ctx "data-definition" (prettyShow n) (getRange d)
+    ++ concatMap (walkDecl (addFlag "constructor" (pushScope (prettyShow n) ctx))) cs
+  C.DataDef _ n _ cs ->
+    entry ctx "data-definition" (prettyShow n) (getRange d)
+    ++ concatMap (walkDecl (addFlag "constructor" (pushScope (prettyShow n) ctx))) cs
+  C.RecordSig _ _ n _ _ -> entry ctx "record-signature" (prettyShow n) (getRange d)
+  C.Record _ _ n _ _ _ ds ->
+    entry ctx "record-definition" (prettyShow n) (getRange d)
+    ++ concatMap (walkDecl (pushScope (prettyShow n) ctx)) ds
+  C.RecordDef _ n _ _ ds ->
+    entry ctx "record-definition" (prettyShow n) (getRange d)
+    ++ concatMap (walkDecl (pushScope (prettyShow n) ctx)) ds
+  C.PatternSyn _ n _ _ -> entry ctx "pattern-synonym" (prettyShow n) (getRange d)
+  C.Generalize _ ds  -> concatMap (walkDecl (addFlag "generalize" ctx)) ds
+  C.Field _ ds       -> concatMap (walkDecl (addFlag "field" ctx)) ds
+  C.Mutual _ ds      -> concatMap (walkDecl ctx) ds
+  C.InterleavedMutual _ ds -> concatMap (walkDecl ctx) ds
+  C.Abstract _ ds    -> concatMap (walkDecl (addFlag "abstract" ctx)) ds
+  C.Private _ _ ds   -> concatMap (walkDecl (addFlag "private" ctx)) ds
+  C.InstanceB _ ds   -> concatMap (walkDecl (addFlag "instance" ctx)) ds
+  C.LoneConstructor _ ds -> concatMap (walkDecl (addFlag "constructor" ctx)) ds
+  C.Macro _ ds       -> concatMap (walkDecl (addFlag "macro" ctx)) ds
+  C.Postulate _ ds   -> concatMap (walkDecl (addFlag "postulate" ctx)) ds
+  C.Primitive _ ds   -> concatMap (walkDecl (addFlag "primitive" ctx)) ds
+  C.Module _ _ qn _ ds -> concatMap (walkDecl (pushScope (prettyShow qn) ctx)) ds
+  C.Opaque _ ds      -> concatMap (walkDecl (addFlag "opaque" ctx)) ds
+  _                  -> []
