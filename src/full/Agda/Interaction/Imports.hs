@@ -76,6 +76,7 @@ import Agda.Syntax.Concrete.Generic
 import Agda.Syntax.Abstract.Name
 import Agda.Syntax.Common
 import Agda.Syntax.Common.Pretty hiding (Mode)
+import Agda.Syntax.Common.Pretty qualified as Pretty
 import Agda.Syntax.Parser
 import Agda.Syntax.Position
 import Agda.Syntax.Scope.Base
@@ -739,12 +740,13 @@ importPrimitiveModules = whenM (optLoadPrimitives <$> pragmaOptions) $ do
       (Strict.Just . Trie.insert [] 0 . Strict.fromMaybe Trie.empty)
 
     -- We don't want to generate highlighting information for Agda.Primitive.
-    withHighlightingLevel None $
-      forM_ (map (filePath libdirPrim </>) $ Set.toList primitiveModules) \ f -> do
-        sf <- srcFromPath (mkAbsolute f)
-        primSource <- parseSource sf
-        checkModuleName' (srcModuleName primSource) (srcOrigin primSource)
-        void $ getNonMainInterface (srcModuleName primSource) (Just primSource)
+    withHighlightingLevel None $ do
+      locallyTC eImplPrimitiveImporting (\_ -> True) $ do
+        forM_ (map (filePath libdirPrim </>) $ Set.toList primitiveModules) \ f -> do
+          sf <- srcFromPath (mkAbsolute f)
+          primSource <- parseSource sf
+          checkModuleName' (srcModuleName primSource) (srcOrigin primSource)
+          void $ getNonMainInterface (srcModuleName primSource) (Just primSource)
 
   reportSLn "import.main" 10 $ "Done importing the primitive modules."
 
@@ -881,20 +883,19 @@ getInterface x isMain msrc = locallyTC eImportStack (x :) do
   where
     addOptionsCompatibilityWarnings :: PragmaOptions -> ModuleInfo -> TCM ModuleInfo
     addOptionsCompatibilityWarnings currentOptions
-      mi@ModuleInfo{ miInterface = i, miPrimitive = isPrim, miWarnings = ws } = do
+      mi@ModuleInfo{ miInterface = i, miIsBuiltin = isBuiltin, miWarnings = ws } = do
 
       -- Andreas, 2026-02-03, issue #8361, debug printing by @nad.
       -- For testing whether 'isBuiltinModule' is thread-safe.
       reportSDoc "import.iface.builtin" 25 do
-        isBuiltin <- isJust <$> isBuiltinModule (srcFileId (miSourceFile mi))
         P.hsep [ "The module", prettyTCM (iTopLevelModuleName i), "is"
-               , if isBuiltin then "primitive." else "not primitive."
+               , if maybe False isPrimitiveModule isBuiltin then "primitive." else "not primitive."
                ]
 
       -- Check that imported options are compatible with current ones (issue #2487),
       -- but give primitive modules a pass.
       -- Compute updated warnings if needed.
-      ws' <- fromMaybe ws <$> getOptionsCompatibilityWarnings isMain isPrim currentOptions i
+      ws' <- fromMaybe ws <$> getOptionsCompatibilityWarnings isMain currentOptions mi
       return mi{ miWarnings = ws' }
 
 -- | If checking produced non-benign warnings, error out.
@@ -938,16 +939,40 @@ checkOptionsCompatible current imported importedModule = flip execStateT True $ 
 
 getOptionsCompatibilityWarnings ::
      MainInterface
-  -> Bool           -- ^ Are we looking at a primitvie module?
   -> PragmaOptions
-  -> Interface
+  -> ModuleInfo
   -> TCM (Maybe (Set TCWarning))
-getOptionsCompatibilityWarnings isMain False currentOptions Interface{ iOptionsUsed, iTopLevelModuleName } = do
-  ifM (checkOptionsCompatible currentOptions iOptionsUsed iTopLevelModuleName)
-    {-then-} (return Nothing) -- No warnings to collect because options were compatible.
-    {-else-} (Just <$> getAllWarnings' isMain ErrorWarnings)
--- Options consistency checking is disabled for always-available primitive modules.
-getOptionsCompatibilityWarnings _ True _ _ = return Nothing
+getOptionsCompatibilityWarnings isMain currentOptions info =
+
+  -- are we importing a primitive module implicitly?
+  viewTC eImplPrimitiveImporting >>= \case
+    True -> pure Nothing
+    False -> case info of
+      ModuleInfo{ miIsBuiltin = isBuiltin
+                , miInterface = Interface{ iOptionsUsed, iTopLevelModuleName = m }
+                , miSourceFile } -> do
+
+        -- Add range to name of imported module.
+        m' <- if not $ null $ getRange m then pure m else do
+          path <- srcFilePath miSourceFile
+          pure $ setRange (rangeFromAbsolutePath path) m
+
+        case isBuiltin of
+          Just IsAgdaPrimitive ->
+            pure Nothing
+          Just IsAgdaPrimitiveCubical ->
+            case _optCubical currentOptions of
+              Nothing -> do
+                warning $ CoInfectiveImport $
+                  Pretty.fsep $
+                  Pretty.pwords "Module imports the cubical primitive module" ++
+                  Pretty.pwords "but does not enable a --cubical[={full,erased,no-glue}] option."
+                Just <$> getAllWarnings' isMain ErrorWarnings
+              Just _  -> pure Nothing
+          _ ->
+            ifM (checkOptionsCompatible currentOptions iOptionsUsed m')
+              {-then-} (pure Nothing) -- No warnings to collect because options were compatible.
+              {-else-} (Just <$> getAllWarnings' isMain ErrorWarnings)
 
 -- | Try to get the interface from interface file or cache.
 
@@ -1026,7 +1051,7 @@ getStoredInterface x file@(SourceFile fi) msrc = do
           path <- srcFilePath file
           lift $ typeError $ OverlappingProjects path topLevelName x
 
-        isPrimitiveMod <- isPrimitiveModule fi
+        isBuiltinMod <- isBuiltinModule fi
 
         lift $ chaseMsg "Loading " x $ Just ifp
         -- print imported warnings
@@ -1035,7 +1060,7 @@ getStoredInterface x file@(SourceFile fi) msrc = do
         loadDecodedModule file $ ModuleInfo
           { miInterface = i
           , miWarnings = empty
-          , miPrimitive = isPrimitiveMod
+          , miIsBuiltin = isBuiltinMod
           , miMode = ModuleTypeChecked
           , miSourceFile = file
           }
@@ -1568,12 +1593,12 @@ createInterface mname sf@(SourceFile sfi) isMain msrc = do
     lensAccumStatistics `modifyTCLens'` (<>) localStatistics
     reportSLn "import.iface" 25 $ prettyShow mname ++ ": Added statistics to the accumulated statistics."
 
-    isPrimitiveMod <- isPrimitiveModule sfi
+    isBuiltinMod <- isBuiltinModule sfi
 
     return ModuleInfo
       { miInterface = finalIface
       , miWarnings = mallWarnings
-      , miPrimitive = isPrimitiveMod
+      , miIsBuiltin = isBuiltinMod
       , miMode = moduleCheckMode isMain
       , miSourceFile = sf
       }

@@ -725,6 +725,15 @@ Experimental features
 
     Default: ``--require-unique-meta-solutions``
 
+.. option:: --irrelevance, --no-irrelevance
+
+     .. versionadded:: 2.9.0
+
+     Enable or disable declaration and use of irrelevant function spaces, record
+     fields, and declarations (see :ref:`irrelevance <irrelevance>`).
+
+     Default: ``--irrelevance``.
+
 .. option:: --prop, --no-prop
 
      .. versionadded:: 2.6.0
@@ -845,6 +854,12 @@ Pattern matching and equality
      Require [do not require] all clauses in a definition to hold as
      definitional equalities unless marked ``CATCHALL`` (see
      :ref:`case-trees`).
+
+     Turns on the following warnings:
+
+     * :option:`CoverageNoExactSplit`
+     * :option:`InlineNoExactSplit`
+     * :option:`ShouldBeEtaRecordPattern`
 
      Default: ``--no-exact-split``.
 
@@ -1989,6 +2004,8 @@ The list containing any warning ``NAME`` can be produced by ``agda --help=warnin
 
      Irrefutable record pattern without eta.
 
+     Off by default, enabled with :option:`--exact-split`.
+
 .. option:: TooManyArgumentsToSort
 
      .. versionadded:: 2.8.0
@@ -2580,6 +2597,7 @@ again, the source file is re-typechecked instead:
 * :option:`--no-guardedness`
 * :option:`--no-import-sorts`
 * :option:`--no-load-primitives`
+* :option:`--no-occurrence-analysis`
 * :option:`--no-pattern-matching`
 * :option:`--no-positivity-check`
 * :option:`--no-projection-like`

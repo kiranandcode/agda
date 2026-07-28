@@ -27,7 +27,7 @@ include ./mk/pretty.mk
 # Or set it in ./mk/config.mk, which is .gitignored
 PARALLEL_TESTS ?= $(shell getconf _NPROCESSORS_ONLN)
 
-AGDA_BIN_SUFFIX = -$(VERSION)
+AGDA_BIN_SUFFIX ?= -$(VERSION)
 AGDA_TESTS_OPTIONS ?=-i -j$(PARALLEL_TESTS)
 
 # A cabal/stack dictionary
@@ -407,10 +407,17 @@ test : check-whitespace \
        succeed \
        fail \
        bugs \
+	   build-succeed-test \
+	   build-fail-test \
        interaction \
+	   test-suite-covers-errors \
+	   test-suite-covers-warnings \
+	   user-manual-covers-options \
+	   user-manual-covers-warnings \
        examples \
        std-lib-test \
        cubical-test \
+	   cubical-succeed \
        interactive \
        latex-html-test \
        api-test \

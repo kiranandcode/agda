@@ -57,6 +57,7 @@ defaultPragmaOptions = PragmaOptions
   , _optUseUnicode                 = Default -- UnicodeOk
   , _optVerbose                    = empty
   , _optProfiling                  = empty
+  , _optIrrelevance                = Default
   , _optProp                       = Default
   , _optLevelUniverse              = Default
   , _optTwoLevel                   = Default

@@ -202,14 +202,17 @@ class Monad m => ReadTCState m where
   withTCState :: (TCState -> TCState) -> m a -> m a
   withTCState = locallyTCState id
 
+  {-# INLINE getTCState #-}
   default getTCState :: (MonadTrans t, ReadTCState n, t n ~ m) => m TCState
   getTCState = lift getTCState
 
+  {-# INLINE locallyTCState #-}
   default locallyTCState
     :: (MonadTransControl t, ReadTCState n, t n ~ m)
     => Lens' TCState a -> (a -> a) -> m b -> m b
   locallyTCState l = liftThrough . locallyTCState l
 
+  {-# INLINE getSessionState #-}
   default getSessionState :: (MonadTrans t, ReadTCState n, t n ~ m) => m SessionState
   getSessionState = lift getSessionState
 
@@ -1483,7 +1486,7 @@ data ModuleInfo = ModuleInfo
     --   These might include warnings not stored in the interface itself,
     --   specifically unsolved interaction metas.
     --   See "Agda.Interaction.Imports"
-  , miPrimitive  :: Bool
+  , miIsBuiltin  :: !(Maybe IsBuiltinModule)
     -- ^ 'True' if the module is a primitive module, which should always
     -- be importable.
   , miMode       :: ModuleCheckMode
@@ -4486,6 +4489,11 @@ envWorkingOnTypes = mkFlag 16
 envPureConversion :: Lens' Flags64 Bool
 envPureConversion = mkFlag 17
 
+-- | Are we doing implicit importing of primitive modules?
+{-# INLINE envImplPrimitiveImporting #-}
+envImplPrimitiveImporting :: Lens' Flags64 Bool
+envImplPrimitiveImporting = mkFlag 18
+
 -- | Choose between behavior in pure conversion and impure conversion.
 --   The first branch is the impure case.
 ifImpureConv :: TCM a -> TCM a -> TCM a
@@ -4516,6 +4524,7 @@ initEnvFlags = Flags64 0
   & envFoldLetBindings       .~ True
   & envMakeCase              .~ False
   & envPureConversion        .~ False
+  & envImplPrimitiveImporting    .~ False
 
 initTCContext :: TCContext
 initTCContext = TCContext {
@@ -4872,6 +4881,10 @@ eWorkingOnTypes = mkEnvFlag 16
 {-# INLINE ePureConversion #-}
 ePureConversion :: Lens' TCEnv Bool
 ePureConversion = mkEnvFlag 17
+
+{-# INLINE eImplPrimitiveImporting #-}
+eImplPrimitiveImporting :: Lens' TCEnv Bool
+eImplPrimitiveImporting = mkEnvFlag 18
 
 
 ----------------------------------------------------------------------------------------------------
@@ -5996,6 +6009,7 @@ data TypeError
         | NeedOptionCubical Cubical String
             -- ^ Flavor of cubical needed for the given reason.
         | NeedOptionPatternMatching
+        | NeedOptionIrrelevance
         | NeedOptionProp
         | NeedOptionRewriting
         | NeedOptionSizedTypes String
@@ -6548,12 +6562,15 @@ class Monad m => MonadTCState m where
   putTC :: TCState -> m ()
   modifyTC :: (TCState -> TCState) -> m ()
 
+  {-# INLINE getTC #-}
   default getTC :: (MonadTrans t, MonadTCState n, t n ~ m) => m TCState
   getTC = lift getTC
 
+  {-# INLINE putTC #-}
   default putTC :: (MonadTrans t, MonadTCState n, t n ~ m) => TCState -> m ()
   putTC = lift . putTC
 
+  {-# INLINE modifyTC #-}
   default modifyTC :: (MonadTrans t, MonadTCState n, t n ~ m) => (TCState -> TCState) -> m ()
   modifyTC = lift . modifyTC
 
@@ -6725,6 +6742,7 @@ class Monad m => MonadBlock m where
   -- | `patternViolation b` aborts the current computation
   patternViolation :: Blocker -> m a
 
+  {-# INLINE patternViolation #-}
   default patternViolation :: (MonadTrans t, MonadBlock n, m ~ t n) => Blocker -> m a
   patternViolation = lift . patternViolation
 
@@ -6760,8 +6778,12 @@ instance MonadBlock m => MonadBlock (ReaderT e m) where
   catchPatternErr h m = ReaderT $ \ e ->
     let run = flip runReaderT e in catchPatternErr (run . h) (run m)
 
-instance MonadFileId m => MonadFileId (BlockT m)
+instance MonadBlock m => MonadBlock (Strict.ReaderT e m) where
+  catchPatternErr h m = Strict.ReaderT (oneShot \e ->
+    let run = flip Strict.runReaderT e; {-# INLINE run #-}
+    in catchPatternErr (run . h) (run m))
 
+instance MonadFileId m => MonadFileId (BlockT m)
 ----------------------------------------------------------------------------------------------------
 -- * Type checking monad transformer
 ----------------------------------------------------------------------------------------------------
